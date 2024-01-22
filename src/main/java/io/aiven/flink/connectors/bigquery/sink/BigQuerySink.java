@@ -1,32 +1,26 @@
 package io.aiven.flink.connectors.bigquery.sink;
 
+import com.google.protobuf.ByteString;
 import java.io.IOException;
-import javax.annotation.Nonnull;
 import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.sink2.SinkWriter;
-import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.types.logical.LogicalType;
-import org.apache.flink.util.Preconditions;
 
 @PublicEvolving
-public class BigQuerySink implements Sink<RowData> {
+public class BigQuerySink implements Sink<ByteString> {
   protected BigQueryConnectionOptions options;
-  protected final String[] fieldNames;
 
-  protected final LogicalType[] fieldTypes;
-
-  public BigQuerySink(
-      String[] fieldNames, @Nonnull LogicalType[] fieldTypes, BigQueryConnectionOptions options) {
-    this.fieldNames = Preconditions.checkNotNull(fieldNames);
-    this.fieldTypes = Preconditions.checkNotNull(fieldTypes);
+  public BigQuerySink(BigQueryConnectionOptions options) {
     this.options = options;
   }
 
   @Override
-  public SinkWriter<RowData> createWriter(InitContext context) throws IOException {
-    return options.getDeliveryGuarantee() == DeliveryGuarantee.EXACTLY_ONCE
-        ? new BigQueryStreamingExactlyOnceSinkWriter(fieldNames, fieldTypes, options)
-        : new BigQueryStreamingAtLeastOnceSinkWriter(fieldNames, fieldTypes, options);
+  public SinkWriter<ByteString> createWriter(InitContext context) throws IOException {
+    if (options.getDeliveryGuarantee() != DeliveryGuarantee.AT_LEAST_ONCE) {
+      throw new IllegalArgumentException(
+          "Unsupported delivery guarantee: " + options.getDeliveryGuarantee());
+    }
+
+    return new BigQueryStreamingAtLeastOnceSinkWriter(options);
   }
 }

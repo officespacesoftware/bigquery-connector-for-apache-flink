@@ -1,63 +1,54 @@
 package io.aiven.flink.connectors.bigquery.sink;
 
-import com.google.api.gax.batching.FlowControlSettings;
 import com.google.api.gax.core.FixedExecutorProvider;
+import com.google.cloud.bigquery.storage.v1.BQTableSchemaToProtoDescriptor;
 import com.google.cloud.bigquery.storage.v1.BigQueryWriteClient;
 import com.google.cloud.bigquery.storage.v1.BigQueryWriteSettings;
-import com.google.cloud.bigquery.storage.v1.CreateWriteStreamRequest;
-import com.google.cloud.bigquery.storage.v1.JsonStreamWriter;
-import com.google.cloud.bigquery.storage.v1.WriteStream;
+import com.google.cloud.bigquery.storage.v1.ProtoRows;
+import com.google.cloud.bigquery.storage.v1.ProtoSchema;
+import com.google.cloud.bigquery.storage.v1.ProtoSchemaConverter;
+import com.google.cloud.bigquery.storage.v1.StreamWriter;
 import com.google.protobuf.Descriptors;
 import java.io.IOException;
 import java.util.concurrent.Executors;
 import javax.annotation.Nonnull;
-import org.apache.flink.table.types.logical.LogicalType;
-import org.json.JSONArray;
+import org.threeten.bp.Duration;
 
 public class BigQueryStreamingAtLeastOnceSinkWriter extends BigQueryWriter {
 
-  protected BigQueryStreamingAtLeastOnceSinkWriter(
-      @Nonnull String[] fieldNames,
-      @Nonnull LogicalType[] fieldTypes,
-      @Nonnull BigQueryConnectionOptions options) {
-    super(fieldNames, fieldTypes, options);
+  protected BigQueryStreamingAtLeastOnceSinkWriter(@Nonnull BigQueryConnectionOptions options) {
+    super(options);
   }
 
   @Override
-  protected JsonStreamWriter getStreamWriter(
+  protected StreamWriter getStreamWriter(
       BigQueryConnectionOptions options, BigQueryWriteClient client)
       throws Descriptors.DescriptorValidationException, IOException, InterruptedException {
-    WriteStream stream = WriteStream.newBuilder().setType(WriteStream.Type.COMMITTED).build();
 
-    CreateWriteStreamRequest createWriteStreamRequest =
-        CreateWriteStreamRequest.newBuilder()
-            .setParent(options.getTableName().toString())
-            .setWriteStream(stream)
-            .build();
-    WriteStream writeStream = client.createWriteStream(createWriteStreamRequest);
+    StreamWriter.Builder streamWriterBuilder =
+        StreamWriter.newBuilder(options.getTableName().toString() + "/_default", client);
 
-    JsonStreamWriter.Builder builder =
-        JsonStreamWriter.newBuilder(writeStream.getName(), writeStream.getTableSchema(), client)
-            .setFlowControlSettings(
-                FlowControlSettings.newBuilder()
-                    .setMaxOutstandingElementCount(options.getMaxOutstandingElementsCount())
-                    .setMaxOutstandingRequestBytes(options.getMaxOutstandingRequestBytes())
-                    .build());
-    return builder
+    ProtoSchema protoSchema =
+        ProtoSchemaConverter.convert(
+            BQTableSchemaToProtoDescriptor.convertBQTableSchemaToProtoDescriptor(
+                options.getTableSchema()));
+
+    streamWriterBuilder
+        .setWriterSchema(protoSchema)
         .setExecutorProvider(FixedExecutorProvider.create(Executors.newScheduledThreadPool(100)))
         .setChannelProvider(
             BigQueryWriteSettings.defaultGrpcTransportProviderBuilder()
-                .setKeepAliveTime(org.threeten.bp.Duration.ofMinutes(1))
-                .setKeepAliveTimeout(org.threeten.bp.Duration.ofMinutes(1))
+                .setKeepAliveTime(Duration.ofMinutes(1))
+                .setKeepAliveTimeout(Duration.ofMinutes(1))
                 .setKeepAliveWithoutCalls(true)
-                // .setChannelsPerCpu(2)
-                .build())
-        .build();
+                .build());
+
+    return streamWriterBuilder.build();
   }
 
   @Override
-  protected void append(JSONArray arr)
+  protected void append(ProtoRows rows)
       throws Descriptors.DescriptorValidationException, IOException, InterruptedException {
-    append(new AppendContext(arr));
+    append(new AppendContext(rows));
   }
 }

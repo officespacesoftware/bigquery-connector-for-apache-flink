@@ -1,67 +1,15 @@
 package io.aiven.flink.connectors.bigquery.sink;
 
 import static org.apache.flink.table.api.Expressions.row;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.google.auth.Credentials;
-import com.google.auth.oauth2.ServiceAccountCredentials;
-import java.io.FileInputStream;
-import java.io.IOException;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutionException;
 import java.util.stream.Stream;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.DataTypes;
-import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
-import org.apache.flink.table.catalog.Column;
-import org.apache.flink.table.catalog.ResolvedSchema;
-import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.types.Row;
-import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
 
 public class BigQuerySinkTest {
-  private static final Map<String, String> ENV_PROP_MAP = System.getenv();
-  private static final String BIG_QUERY_SERVICE_ACCOUNT =
-      ENV_PROP_MAP.get("BIG_QUERY_SERVICE_ACCOUNT");
-  private static final String BIG_QUERY_PROJECT_ID = ENV_PROP_MAP.get("BIG_QUERY_PROJECT_ID");
-  private static final String DATASET_NAME = "TestDataSet";
-  private static final Credentials CREDENTIALS;
-
-  static {
-    try (FileInputStream fis = new FileInputStream(BIG_QUERY_SERVICE_ACCOUNT)) {
-      CREDENTIALS = ServiceAccountCredentials.fromStream(fis);
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-  }
-
-  @ParameterizedTest
-  @MethodSource("datatypeProvider")
-  void tableCreationTest(String tableName, String[] fieldNames, DataType[] fieldTypes) {
-    for (DeliveryGuarantee dg : DeliveryGuarantee.values()) {
-      BigQueryConnectionOptions options =
-          new BigQueryConnectionOptions(
-              BIG_QUERY_PROJECT_ID,
-              DATASET_NAME,
-              tableName + "-" + dg.name(),
-              true,
-              dg,
-              1000L,
-              100 * 1024 * 1024,
-              10,
-              10,
-              CREDENTIALS);
-      var table = BigQueryDynamicTableSink.ensureTableExists(fieldNames, fieldTypes, options);
-      table.delete();
-    }
-  }
-
   static Stream<Arguments> datatypeProvider() {
     return Stream.of(
         Arguments.of(
@@ -127,53 +75,6 @@ public class BigQuerySinkTest {
                       DataTypes.INT())
                   .notNull()
             }));
-  }
-
-  @ParameterizedTest
-  @MethodSource("validTableDefinitionsProvider")
-  void testValidTableDefinitions(
-      String[] bqColumnNames,
-      DataType[] bqColumnTypes,
-      String[] flinkColumnNames,
-      DataType[] flinkColumnTypes,
-      Expression expression) {
-    StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-    env.setParallelism(8);
-    StreamTableEnvironment tableEnv = StreamTableEnvironment.create(env);
-    String bigQueryTableName = "test-" + bqColumnNames[0] + "-table-" + System.nanoTime();
-    BigQueryConnectionOptions options =
-        new BigQueryConnectionOptions(
-            BIG_QUERY_PROJECT_ID,
-            DATASET_NAME,
-            bigQueryTableName,
-            true,
-            DeliveryGuarantee.EXACTLY_ONCE,
-            1000L,
-            100 * 1024 * 1024,
-            10,
-            10,
-            CREDENTIALS);
-    var table = BigQueryDynamicTableSink.ensureTableExists(bqColumnNames, bqColumnTypes, options);
-    List<Column> columns = new ArrayList<>();
-    StringBuilder sb = new StringBuilder();
-    for (int i = 0; i < flinkColumnNames.length; i++) {
-      columns.add(Column.metadata(flinkColumnNames[i], flinkColumnTypes[i], null, false));
-      sb.append("`").append(flinkColumnNames[i]).append("` ").append(flinkColumnTypes[i]);
-      if (i < flinkColumnNames.length - 1) {
-        sb.append(",\n");
-      }
-    }
-    final ResolvedSchema schema = ResolvedSchema.of(columns);
-
-    String testTable = "test_table";
-    try {
-      createTemporaryTableWithField(tableEnv, sb.toString(), testTable, bigQueryTableName);
-      executeInsert(tableEnv, schema, testTable, expression);
-    } catch (ExecutionException | InterruptedException e) {
-      throw new RuntimeException(e);
-    } finally {
-      table.delete();
-    }
   }
 
   static Stream<Arguments> validTableDefinitionsProvider() {
@@ -282,60 +183,6 @@ public class BigQuerySinkTest {
             "Column #2 with name 'row.f2' is not nullable 'INT64' in BQ while in Flink it is nullable 'INT64'"));
   }
 
-  @ParameterizedTest
-  @MethodSource("invalidDefinitionsProvider")
-  void testInvalidTableDefinitions(
-      String[] bqColumnNames,
-      DataType[] bqColumnTypes,
-      String[] flinkColumnNames,
-      DataType[] flinkColumnTypes,
-      Expression expression,
-      String expectedMessage) {
-    StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-    env.setParallelism(8);
-    StreamTableEnvironment tableEnv = StreamTableEnvironment.create(env);
-    // BigQuery has quotas for number of DDL operations per table name
-    // thus System.nanoTime() helps to avoid exceeding quotas while running test multiple times
-    // during debug
-    String bigQueryTableName = "test-" + bqColumnNames[0] + "-table-" + System.nanoTime();
-    BigQueryConnectionOptions options =
-        new BigQueryConnectionOptions(
-            BIG_QUERY_PROJECT_ID,
-            DATASET_NAME,
-            bigQueryTableName,
-            true,
-            DeliveryGuarantee.EXACTLY_ONCE,
-            1000L,
-            100 * 1024 * 1024,
-            10,
-            10,
-            CREDENTIALS);
-    var table = BigQueryDynamicTableSink.ensureTableExists(bqColumnNames, bqColumnTypes, options);
-    List<Column> columns = new ArrayList<>();
-    StringBuilder sb = new StringBuilder();
-    for (int i = 0; i < flinkColumnNames.length; i++) {
-      columns.add(Column.metadata(flinkColumnNames[i], flinkColumnTypes[i], null, false));
-      sb.append("`").append(flinkColumnNames[i]).append("` ").append(flinkColumnTypes[i]);
-      if (i < flinkColumnNames.length - 1) {
-        sb.append(",\n");
-      }
-    }
-    final ResolvedSchema schema = ResolvedSchema.of(columns);
-
-    String testTable = "test_table";
-    try {
-      assertThatThrownBy(
-              () -> {
-                createTemporaryTableWithField(
-                    tableEnv, sb.toString(), testTable, bigQueryTableName);
-                executeInsert(tableEnv, schema, testTable, expression);
-              })
-          .hasStackTraceContaining(expectedMessage);
-    } finally {
-      table.delete();
-    }
-  }
-
   static Stream<Arguments> invalidDefinitionsProvider() {
     return Stream.of(
         Arguments.of(
@@ -415,40 +262,5 @@ public class BigQuerySinkTest {
             },
             row(Row.of("value1", 11)),
             "Column #2 with name 'row.f2' has type 'INT64' in BQ while in Flink it has type 'STRING'"));
-  }
-
-  private static void executeInsert(
-      StreamTableEnvironment tableEnv,
-      ResolvedSchema schema,
-      String tableName,
-      Expression expression)
-      throws InterruptedException, ExecutionException {
-    tableEnv.fromValues(schema.toSinkRowDataType(), expression).executeInsert(tableName).await();
-  }
-
-  private static void createTemporaryTableWithField(
-      StreamTableEnvironment tableEnv, String fieldInfo, String tableName, String bigQueryTableName)
-      throws InterruptedException, ExecutionException {
-    tableEnv
-        .executeSql(
-            "CREATE TEMPORARY TABLE "
-                + tableName
-                + " ( \n"
-                + fieldInfo
-                + ") WITH (\n"
-                + "  'connector' = 'bigquery',"
-                + "  'service-account' = '"
-                + BIG_QUERY_SERVICE_ACCOUNT
-                + "',"
-                + "  'project-id' = '"
-                + BIG_QUERY_PROJECT_ID
-                + "',"
-                + "  'dataset' = 'TestDataSet',"
-                + "  'table-create-if-not-exists' = 'true',"
-                + "  'table' = '"
-                + bigQueryTableName
-                + "'"
-                + ")")
-        .await();
   }
 }

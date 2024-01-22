@@ -1,56 +1,43 @@
 package io.aiven.flink.connectors.bigquery.sink;
 
 import static io.grpc.Status.Code.ALREADY_EXISTS;
-import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE;
-import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-import static java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME;
-import static java.time.format.DateTimeFormatter.ISO_TIME;
 
 import com.google.api.core.ApiFuture;
 import com.google.api.core.ApiFutureCallback;
 import com.google.api.core.ApiFutures;
-import com.google.api.gax.batching.FlowControlSettings;
 import com.google.api.gax.core.FixedCredentialsProvider;
+import com.google.api.gax.core.FixedExecutorProvider;
 import com.google.cloud.bigquery.BigQueryException;
 import com.google.cloud.bigquery.storage.v1.AppendRowsResponse;
+import com.google.cloud.bigquery.storage.v1.BQTableSchemaToProtoDescriptor;
 import com.google.cloud.bigquery.storage.v1.BigQueryWriteClient;
 import com.google.cloud.bigquery.storage.v1.BigQueryWriteSettings;
 import com.google.cloud.bigquery.storage.v1.Exceptions;
-import com.google.cloud.bigquery.storage.v1.JsonStreamWriter;
+import com.google.cloud.bigquery.storage.v1.ProtoRows;
+import com.google.cloud.bigquery.storage.v1.ProtoSchemaConverter;
+import com.google.cloud.bigquery.storage.v1.StreamWriter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.MoreExecutors;
+import com.google.protobuf.ByteString;
 import com.google.protobuf.Descriptors;
 import io.grpc.Status;
 import java.io.IOException;
 import java.io.Serializable;
-import java.math.BigDecimal;
-import java.time.LocalDate;
-import java.time.LocalTime;
-import java.util.Arrays;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Phaser;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.annotation.Nonnull;
 import javax.annotation.concurrent.GuardedBy;
 import org.apache.flink.api.connector.sink2.SinkWriter;
-import org.apache.flink.table.data.ArrayData;
-import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.types.DataType;
-import org.apache.flink.table.types.logical.ArrayType;
-import org.apache.flink.table.types.logical.LogicalType;
-import org.apache.flink.table.types.logical.RowType;
-import org.apache.flink.table.types.logical.utils.LogicalTypeChecks;
 import org.apache.flink.util.Preconditions;
-import org.json.JSONArray;
-import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.threeten.bp.Duration;
 
 /** Abstract class of BigQuery output format. */
-public abstract class BigQueryWriter implements SinkWriter<RowData> {
+public abstract class BigQueryWriter implements SinkWriter<ByteString> {
   private static final Logger LOG = LoggerFactory.getLogger(BigQueryWriter.class);
   private static final ImmutableList<Status.Code> RETRIABLE_ERROR_CODES =
       ImmutableList.of(
@@ -61,16 +48,14 @@ public abstract class BigQueryWriter implements SinkWriter<RowData> {
           Status.Code.DEADLINE_EXCEEDED,
           Status.Code.UNAVAILABLE);
   protected static final int MAX_RECREATE_COUNT = 3;
-  protected final String[] fieldNames;
-
-  protected final LogicalType[] fieldTypes;
 
   protected final BigQueryConnectionOptions options;
   protected transient BigQueryWriteClient client;
 
-  protected transient JsonStreamWriter streamWriter;
+  protected transient StreamWriter streamWriter;
 
-  // Track the number of in-flight requests to wait for all responses before shutting down.
+  // Track the number of in-flight requests to wait for all responses before
+  // shutting down.
   protected transient Phaser inflightRequestCount;
   protected final AtomicInteger recreateCount = new AtomicInteger(0);
 
@@ -79,12 +64,7 @@ public abstract class BigQueryWriter implements SinkWriter<RowData> {
   @GuardedBy("lock")
   protected RuntimeException error = null;
 
-  public BigQueryWriter(
-      @Nonnull String[] fieldNames,
-      @Nonnull LogicalType[] fieldTypes,
-      @Nonnull BigQueryConnectionOptions options) {
-    this.fieldNames = Preconditions.checkNotNull(fieldNames);
-    this.fieldTypes = Preconditions.checkNotNull(fieldTypes);
+  public BigQueryWriter(@Nonnull BigQueryConnectionOptions options) {
     this.options = Preconditions.checkNotNull(options);
     FixedCredentialsProvider creds = FixedCredentialsProvider.create(options.getCredentials());
     inflightRequestCount = new Phaser(1);
@@ -140,20 +120,12 @@ public abstract class BigQueryWriter implements SinkWriter<RowData> {
     }
   }
 
+  // ** `context` is never used in this function */
   @Override
-  public void write(RowData record, Context context) throws IOException {
+  public void write(ByteString bytes, Context context) throws IOException {
+    ProtoRows protoRows = ProtoRows.newBuilder().addSerializedRows(bytes).build();
     try {
-      JSONObject rowContent = new JSONObject();
-      final int arity = record.getArity();
-      for (int i = 0; i < arity; i++) {
-        final Object value = retrieveValue(record, fieldTypes[i], i);
-        rowContent.put(fieldNames[i], value);
-      }
-
-      JSONArray arr = new JSONArray();
-      arr.put(rowContent);
-
-      append(arr);
+      append(protoRows);
     } catch (BigQueryException
         | Descriptors.DescriptorValidationException
         | InterruptedException
@@ -168,33 +140,19 @@ public abstract class BigQueryWriter implements SinkWriter<RowData> {
     }
   }
 
-  protected abstract JsonStreamWriter getStreamWriter(
+  protected abstract StreamWriter getStreamWriter(
       BigQueryConnectionOptions options, BigQueryWriteClient client)
       throws Descriptors.DescriptorValidationException, IOException, InterruptedException;
 
-  protected abstract void append(JSONArray arr)
+  protected abstract void append(ProtoRows rows)
       throws Descriptors.DescriptorValidationException, IOException, InterruptedException,
           ExecutionException;
 
   public static class Builder {
 
-    private DataType[] fieldDataTypes;
-
-    private String[] fieldNames;
-
     private BigQueryConnectionOptions options;
 
     public Builder() {}
-
-    public Builder withFieldDataTypes(DataType[] fieldDataTypes) {
-      this.fieldDataTypes = fieldDataTypes;
-      return this;
-    }
-
-    public Builder withFieldNames(String[] fieldNames) {
-      this.fieldNames = fieldNames;
-      return this;
-    }
 
     public Builder withOptions(BigQueryConnectionOptions options) {
       this.options = options;
@@ -202,176 +160,13 @@ public abstract class BigQueryWriter implements SinkWriter<RowData> {
     }
 
     public BigQueryWriter build() {
-      Preconditions.checkNotNull(fieldNames);
-      Preconditions.checkNotNull(fieldDataTypes);
-      LogicalType[] logicalTypes =
-          Arrays.stream(fieldDataTypes).map(DataType::getLogicalType).toArray(LogicalType[]::new);
+      Preconditions.checkNotNull(options);
       if (options.getDeliveryGuarantee() == DeliveryGuarantee.AT_LEAST_ONCE) {
-        return new BigQueryStreamingAtLeastOnceSinkWriter(fieldNames, logicalTypes, options);
+        return new BigQueryStreamingAtLeastOnceSinkWriter(options);
       }
-      return new BigQueryStreamingExactlyOnceSinkWriter(fieldNames, logicalTypes, options);
-    }
-  }
 
-  private Object retrieveValue(RowData record, LogicalType type, int i) {
-    if (record.isNullAt(i)) {
-      return null;
-    }
-    switch (type.getTypeRoot()) {
-      case NULL:
-        return null;
-      case BIGINT:
-        return record.getLong(i);
-      case BOOLEAN:
-        return record.getBoolean(i);
-      case DOUBLE:
-        return record.getDouble(i);
-      case DECIMAL:
-        return record
-            .getDecimal(i, LogicalTypeChecks.getPrecision(type), LogicalTypeChecks.getScale(type))
-            .toBigDecimal();
-      case FLOAT:
-        return record.getFloat(i);
-      case INTEGER:
-        return record.getInt(i);
-      case CHAR:
-      case VARCHAR:
-        return record.getString(i).toString();
-      case DATE:
-        return LocalDate.ofEpochDay(record.getInt(i)).format(ISO_LOCAL_DATE);
-      case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-        return record
-            // 6 - max timestamp precision supported by BigQuery
-            .getTimestamp(i, Math.min(6, LogicalTypeChecks.getPrecision(type)))
-            .toLocalDateTime()
-            .format(ISO_OFFSET_DATE_TIME);
-      case TIME_WITHOUT_TIME_ZONE:
-        int millis = record.getInt(i);
-        return LocalTime.of(
-                millis / 60 / 60 / 1000, (millis / 1000 / 60) % 60, (millis / 1000) % 60)
-            .format(ISO_TIME);
-      case TIMESTAMP_WITHOUT_TIME_ZONE:
-        return record
-            .getTimestamp(i, Math.min(6, LogicalTypeChecks.getPrecision(type)))
-            .toLocalDateTime()
-            .format(ISO_LOCAL_DATE_TIME);
-      case ARRAY:
-        return new JSONArray(retrieveFromArray(record.getArray(i), (ArrayType) type));
-      case ROW:
-        return retrieveFromRow(record.getRow(i, ((RowType) type).getFieldCount()), (RowType) type);
-      default:
-        throw new RuntimeException(type.getTypeRoot() + " is not supported");
-    }
-  }
-
-  private JSONObject retrieveFromRow(RowData rowData, RowType type) {
-    final JSONObject map = new JSONObject();
-    final List<RowType.RowField> fields = type.getFields();
-    for (int i = 0; i < fields.size(); i++) {
-      map.put(fields.get(i).getName(), retrieveValue(rowData, fields.get(i).getType(), i));
-    }
-    return map;
-  }
-
-  private Object retrieveFromArray(ArrayData arrayData, ArrayType arrayType) {
-    final LogicalType type;
-    final Object[] value;
-    switch (arrayType.getElementType().getTypeRoot()) {
-      case BOOLEAN:
-        return arrayData.toBooleanArray();
-      case INTEGER:
-        return arrayData.toIntArray();
-      case SMALLINT:
-        return arrayData.toShortArray();
-      case BIGINT:
-        return arrayData.toLongArray();
-      case FLOAT:
-        return arrayData.toFloatArray();
-      case DOUBLE:
-        return arrayData.toDoubleArray();
-      case DECIMAL:
-        type = arrayType.getElementType();
-        value = new BigDecimal[arrayData.size()];
-        for (int i = 0; i < value.length; i++) {
-          value[i] =
-              arrayData.isNullAt(i)
-                  ? null
-                  : arrayData
-                      .getDecimal(
-                          i, LogicalTypeChecks.getPrecision(type), LogicalTypeChecks.getScale(type))
-                      .toBigDecimal();
-        }
-        return value;
-      case DATE:
-        type = arrayType.getElementType();
-        value = new String[arrayData.size()];
-        for (int i = 0; i < value.length; i++) {
-          value[i] =
-              arrayData.isNullAt(i)
-                  ? null
-                  : arrayData
-                      .getTimestamp(i, LogicalTypeChecks.getPrecision(type))
-                      .toLocalDateTime()
-                      .format(ISO_LOCAL_DATE);
-        }
-        return value;
-      case TIME_WITHOUT_TIME_ZONE:
-        value = new String[arrayData.size()];
-        for (int i = 0; i < value.length; i++) {
-          int millis = arrayData.getInt(i);
-          value[i] =
-              arrayData.isNullAt(i)
-                  ? null
-                  : LocalTime.of(
-                          millis / 60 / 60 / 1000, (millis / 1000 / 60) % 60, (millis / 1000) % 60)
-                      .format(ISO_TIME);
-        }
-        return value;
-      case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-        type = arrayType.getElementType();
-        value = new String[arrayData.size()];
-        for (int i = 0; i < value.length; i++) {
-          value[i] =
-              arrayData.isNullAt(i)
-                  ? null
-                  : arrayData
-                      .getTimestamp(i, LogicalTypeChecks.getPrecision(type))
-                      .toLocalDateTime()
-                      .format(ISO_OFFSET_DATE_TIME);
-        }
-        return value;
-      case TIMESTAMP_WITHOUT_TIME_ZONE:
-        type = arrayType.getElementType();
-        value = new String[arrayData.size()];
-        for (int i = 0; i < value.length; i++) {
-          value[i] =
-              arrayData.isNullAt(i)
-                  ? null
-                  : arrayData
-                      .getTimestamp(i, LogicalTypeChecks.getPrecision(type))
-                      .toLocalDateTime()
-                      .format(ISO_LOCAL_DATE_TIME);
-        }
-        return value;
-      case CHAR:
-      case VARCHAR:
-        value = new String[arrayData.size()];
-        for (int i = 0; i < value.length; i++) {
-          value[i] = arrayData.isNullAt(i) ? null : arrayData.getString(i).toString();
-        }
-        return value;
-        /*
-        CURRENTLY BIG_QUERY DOES NOT SUPPORT NESTED ARRAYS
-        case ARRAY:
-        List<LogicalType> children = arrayType.getChildren();
-        Object[] result = new Object[arrayData.size()];
-        for (int i = 0; i < arrayData.size(); i++) {
-          result[i] = retrieveFromArray(arrayData.getArray(i), (ArrayType) arrayType.getElementType());
-        }
-        return result;
-        */
-      default:
-        throw new RuntimeException(arrayType.getElementType().getTypeRoot() + " is not supported");
+      throw new IllegalArgumentException(
+          "Delivery guarantee " + options.getDeliveryGuarantee() + " is not supported");
     }
   }
 
@@ -382,11 +177,18 @@ public abstract class BigQueryWriter implements SinkWriter<RowData> {
           && streamWriter.isClosed()
           && recreateCount.getAndIncrement() < options.getRecreateCount()) {
         streamWriter =
-            JsonStreamWriter.newBuilder(streamWriter.getStreamName(), BigQueryWriteClient.create())
-                .setFlowControlSettings(
-                    FlowControlSettings.newBuilder()
-                        .setMaxOutstandingElementCount(options.getMaxOutstandingElementsCount())
-                        .setMaxOutstandingRequestBytes(options.getMaxOutstandingRequestBytes())
+            StreamWriter.newBuilder(streamWriter.getStreamName(), BigQueryWriteClient.create())
+                .setWriterSchema(
+                    ProtoSchemaConverter.convert(
+                        BQTableSchemaToProtoDescriptor.convertBQTableSchemaToProtoDescriptor(
+                            options.getTableSchema())))
+                .setExecutorProvider(
+                    FixedExecutorProvider.create(Executors.newScheduledThreadPool(100)))
+                .setChannelProvider(
+                    BigQueryWriteSettings.defaultGrpcTransportProviderBuilder()
+                        .setKeepAliveTime(Duration.ofMinutes(1))
+                        .setKeepAliveTimeout(Duration.ofMinutes(1))
+                        .setKeepAliveWithoutCalls(true)
                         .build())
                 .build();
         this.error = null;
@@ -407,10 +209,10 @@ public abstract class BigQueryWriter implements SinkWriter<RowData> {
 
   protected static class AppendContext {
 
-    private final JSONArray data;
+    private final ProtoRows data;
     private int retryCount = 0;
 
-    AppendContext(JSONArray data) {
+    AppendContext(ProtoRows data) {
       this.data = data;
     }
   }
@@ -433,15 +235,22 @@ public abstract class BigQueryWriter implements SinkWriter<RowData> {
 
     @Override
     public void onFailure(Throwable throwable) {
-      // If the wrapped exception is a StatusRuntimeException, check the state of the operation.
-      // If the state is INTERNAL, CANCELLED, or ABORTED, you can retry. For more information,
-      // see: https://grpc.github.io/grpc-java/javadoc/io/grpc/StatusRuntimeException.html
+      // If the wrapped exception is a StatusRuntimeException, check the state of the
+      // operation.
+      // If the state is INTERNAL, CANCELLED, or ABORTED, you can retry. For more
+      // information,
+      // see:
+      // https://grpc.github.io/grpc-java/javadoc/io/grpc/StatusRuntimeException.html
       Status status = Status.fromThrowable(throwable);
+      LOG.error("Received error for append: ", throwable);
+      throwable.fillInStackTrace().printStackTrace();
       if (appendContext.retryCount < this.parent.options.getRetryCount()
           && RETRIABLE_ERROR_CODES.contains(status.getCode())) {
         appendContext.retryCount++;
+        LOG.error("Retrying append: " + appendContext.retryCount);
         try {
-          // Since default stream appends are not ordered, we can simply retry the appends.
+          // Since default stream appends are not ordered, we can simply retry the
+          // appends.
           // Retrying with exclusive streams requires more careful consideration.
           this.parent.append(appendContext);
           // Mark the existing attempt as done since it's being retried.
@@ -464,20 +273,22 @@ public abstract class BigQueryWriter implements SinkWriter<RowData> {
       if (throwable instanceof Exceptions.AppendSerializationError) {
         Exceptions.AppendSerializationError ase = (Exceptions.AppendSerializationError) throwable;
         Map<Integer, String> rowIndexToErrorMessage = ase.getRowIndexToErrorMessage();
+        LOG.error("Append serialization error: " + rowIndexToErrorMessage.toString());
         if (!rowIndexToErrorMessage.isEmpty()) {
           // Omit the faulty rows
-          JSONArray dataNew = new JSONArray();
-          for (int i = 0; i < appendContext.data.length(); i++) {
+          ProtoRows.Builder dataBuilder = ProtoRows.newBuilder();
+          for (int i = 0; i < appendContext.data.getSerializedRowsCount(); i++) {
             if (!rowIndexToErrorMessage.containsKey(i)) {
-              dataNew.put(appendContext.data.get(i));
+              dataBuilder.addSerializedRows(appendContext.data.getSerializedRows(i));
             } else {
               // process faulty rows by placing them on a dead-letter-queue, for instance
             }
           }
+          ProtoRows dataNew = dataBuilder.build();
 
           // Retry the remaining valid rows, but using a separate thread to
           // avoid potentially blocking while we are in a callback.
-          if (!dataNew.isEmpty()) {
+          if (dataNew.getSerializedRowsCount() > 0) {
             try {
               this.parent.append(new AppendContext(dataNew));
             } catch (Descriptors.DescriptorValidationException

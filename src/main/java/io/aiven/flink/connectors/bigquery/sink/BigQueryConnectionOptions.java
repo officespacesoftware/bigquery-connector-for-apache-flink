@@ -1,23 +1,9 @@
 package io.aiven.flink.connectors.bigquery.sink;
 
-import static io.aiven.flink.connectors.bigquery.sink.BigQueryConfigOptions.CREATE_TABLE_IF_NOT_PRESENT;
-import static io.aiven.flink.connectors.bigquery.sink.BigQueryConfigOptions.DATASET;
-import static io.aiven.flink.connectors.bigquery.sink.BigQueryConfigOptions.DELIVERY_GUARANTEE;
-import static io.aiven.flink.connectors.bigquery.sink.BigQueryConfigOptions.MAX_OUTSTANDING_ELEMENTS_COUNT;
-import static io.aiven.flink.connectors.bigquery.sink.BigQueryConfigOptions.MAX_OUTSTANDING_REQUEST_BYTES;
-import static io.aiven.flink.connectors.bigquery.sink.BigQueryConfigOptions.PROJECT_ID;
-import static io.aiven.flink.connectors.bigquery.sink.BigQueryConfigOptions.RECREATE_COUNT;
-import static io.aiven.flink.connectors.bigquery.sink.BigQueryConfigOptions.RETRY_COUNT;
-import static io.aiven.flink.connectors.bigquery.sink.BigQueryConfigOptions.SERVICE_ACCOUNT;
-import static io.aiven.flink.connectors.bigquery.sink.BigQueryConfigOptions.TABLE;
-
 import com.google.auth.Credentials;
-import com.google.auth.oauth2.ServiceAccountCredentials;
 import com.google.cloud.bigquery.storage.v1.TableName;
-import java.io.FileInputStream;
-import java.io.IOException;
+import com.google.cloud.bigquery.storage.v1.TableSchema;
 import java.io.Serializable;
-import org.apache.flink.configuration.ReadableConfig;
 
 public class BigQueryConnectionOptions implements Serializable {
 
@@ -27,6 +13,8 @@ public class BigQueryConnectionOptions implements Serializable {
   private final String project;
   private final String dataset;
   private final String table;
+  private transient TableSchema tableSchema;
+  private final byte[] tableSchemeBytes;
   private final long maxOutstandingElementsCount;
   private final long maxOutstandingRequestBytes;
   private final int retryCount;
@@ -39,6 +27,7 @@ public class BigQueryConnectionOptions implements Serializable {
       String project,
       String dataset,
       String table,
+      TableSchema tableSchema,
       boolean createIfNotExists,
       DeliveryGuarantee deliveryGuarantee,
       long maxOutstandingElementsCount,
@@ -49,6 +38,8 @@ public class BigQueryConnectionOptions implements Serializable {
     this.project = project;
     this.dataset = dataset;
     this.table = table;
+    this.tableSchema = tableSchema;
+    this.tableSchemeBytes = tableSchema.toByteArray();
     this.createIfNotExists = createIfNotExists;
     this.deliveryGuarantee = deliveryGuarantee;
     this.credentials = credentials;
@@ -58,28 +49,12 @@ public class BigQueryConnectionOptions implements Serializable {
     this.recreateCount = recreateCount;
   }
 
-  public static BigQueryConnectionOptions fromReadableConfig(ReadableConfig config) {
-    final Credentials credentials;
-    try (FileInputStream fis = new FileInputStream(config.get(SERVICE_ACCOUNT))) {
-      credentials = ServiceAccountCredentials.fromStream(fis);
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-    return new BigQueryConnectionOptions(
-        config.get(PROJECT_ID),
-        config.get(DATASET),
-        config.get(TABLE),
-        config.get(CREATE_TABLE_IF_NOT_PRESENT),
-        config.get(DELIVERY_GUARANTEE),
-        config.get(MAX_OUTSTANDING_ELEMENTS_COUNT),
-        config.get(MAX_OUTSTANDING_REQUEST_BYTES),
-        config.get(RETRY_COUNT),
-        config.get(RECREATE_COUNT),
-        credentials);
-  }
-
   public TableName getTableName() {
     return TableName.of(project, dataset, table);
+  }
+
+  public TableSchema getTableSchema() {
+    return tableSchema;
   }
 
   public Credentials getCredentials() {
@@ -108,5 +83,11 @@ public class BigQueryConnectionOptions implements Serializable {
 
   public int getRecreateCount() {
     return recreateCount;
+  }
+
+  private void readObject(java.io.ObjectInputStream in)
+      throws java.io.IOException, ClassNotFoundException {
+    in.defaultReadObject();
+    this.tableSchema = TableSchema.parseFrom(tableSchemeBytes);
   }
 }

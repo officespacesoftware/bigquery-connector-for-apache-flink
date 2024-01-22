@@ -6,14 +6,14 @@
 
     <groupId>io.aiven</groupId>
     <artifactId>flink-bigquery-connector</artifactId>
-    <version>0.0.6-SNAPSHOT</version>
+    <version>0.0.7-SNAPSHOT</version>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <assertj.core.version>3.24.2</assertj.core.version>
         <error_prone_core.version>2.20.0</error_prone_core.version>
-        <flink.version>1.16.2</flink.version>
-        <google-cloud-libraries.version>26.22.0</google-cloud-libraries.version>
+        <flink.version>1.17.2</flink.version>
+        <google-cloud-libraries.version>26.15.0</google-cloud-libraries.version>
         <java.version>11</java.version>
         <junit.version>5.10.0</junit.version>
         <googleJavaFormat.version>1.14.0</googleJavaFormat.version>
@@ -60,11 +60,11 @@
                 </exclusion>
                 <exclusion>
                     <groupId>com.fasterxml.jackson.core</groupId>
-                    <artifactId>jackson-datatype-jsr310</artifactId>
+                    <artifactId>jackson-datatype-jsr305</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>com.fasterxml.jackson.datatype</groupId>
-                    <artifactId>jackson-datatype-jsr310</artifactId>
+                    <artifactId>jackson-datatype-jsr305</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>com.google.android</groupId>
@@ -301,8 +301,44 @@
                             </artifactSet>
                             <relocations>
                                 <relocation>
-                                    <pattern>com.google</pattern>
-                                    <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.com.google</shadedPattern>
+                                    <pattern>com.google.auth</pattern>
+                                    <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.com.google.auth</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.api</pattern>
+                                    <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.com.google.api</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.cloud</pattern>
+                                    <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.com.google.cloud</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.common</pattern>
+                                    <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.com.google.common</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.geo</pattern>
+                                    <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.com.google.geo</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.iam</pattern>
+                                    <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.com.google.iam</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.logging</pattern>
+                                    <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.com.google.logging</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.longrunning</pattern>
+                                    <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.com.google.longrunning</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.rpc</pattern>
+                                    <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.com.google.rpc</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.type</pattern>
+                                    <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.com.google.type</shadedPattern>
                                 </relocation>
                                 <relocation>
                                     <pattern>google.api</pattern>
@@ -327,10 +363,6 @@
                                 <relocation>
                                     <pattern>google.longrunning</pattern>
                                     <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.google.longrunning</shadedPattern>
-                                </relocation>
-                                <relocation>
-                                    <pattern>google.protobuf</pattern>
-                                    <shadedPattern>io.aiven.flink.connectors.bigquery.shaded.google.protobuf</shadedPattern>
                                 </relocation>
                                 <relocation>
                                     <pattern>google.rpc</pattern>
